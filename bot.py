@@ -208,7 +208,18 @@ def main():
 
     application.add_handler(conv_handler)
 
-    application.run_polling()
+    # Use webhook mode for cloud hosting (Render)
+    WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+    if not WEBHOOK_URL:
+        logger.error("Please set the WEBHOOK_URL environment variable to your public HTTPS URL.")
+        return
+    # Listen on all interfaces, port 10000 (Render default), path '/'
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.getenv("PORT", "10000")),
+        url_path="/",
+        webhook_url=WEBHOOK_URL
+    )
 
 
 if __name__ == '__main__':
