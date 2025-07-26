@@ -295,13 +295,21 @@ def telegram_webhook(token):
     telegram_token = os.environ.get("TELEGRAM_TOKEN")
     if token != telegram_token:
         return "Invalid token", 403
-    if telegram_application:
-        # Parse the incoming update using the public API
-        update_json = request.get_json(force=True)
-        update = TGUpdate.de_json(update_json, telegram_application.bot)
-        asyncio.run(telegram_application.process_update(update))
-        return "OK", 200
-    return "Bot not initialized", 500
+    try:
+        if telegram_application and getattr(telegram_application, 'bot', None):
+            update_json = request.get_json(force=True)
+            if not update_json:
+                return "No JSON received", 400
+            update = TGUpdate.de_json(update_json, telegram_application.bot)
+            asyncio.run(telegram_application.process_update(update))
+            return "OK", 200
+        else:
+            return "Bot not initialized", 500
+    except Exception as e:
+        import traceback
+        error_message = f"Webhook error: {str(e)}\n{traceback.format_exc()}"
+        print(error_message)
+        return error_message, 500
 
 def run_local():
     global telegram_application
@@ -312,11 +320,16 @@ def run_production():
     import asyncio
     global telegram_application
     telegram_application = setup_telegram_application()
-    # Set webhook to Flask endpoint
+    # Set webhook to Flask endpoint only if not already set
     webhook_url = os.environ.get("WEBHOOK_URL")
     telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
     full_webhook_url = f"{webhook_url}/webhook/{telegram_token}"
-    asyncio.run(telegram_application.bot.set_webhook(full_webhook_url))
+    async def ensure_webhook():
+        if telegram_application and getattr(telegram_application, 'bot', None):
+            info = await telegram_application.bot.get_webhook_info()
+            if info.url != full_webhook_url:
+                await telegram_application.bot.set_webhook(full_webhook_url)
+    asyncio.run(ensure_webhook())
 
 if __name__ == "__main__":
     load_dotenv()
