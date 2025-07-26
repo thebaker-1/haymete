@@ -304,20 +304,15 @@ if __name__ == "__main__":
     # Load .env variables before checking RUN_LOCAL
     from dotenv import load_dotenv
     load_dotenv()
-    # If running locally, start Flask in a thread and run the bot
-    # In production (e.g. Render), use Gunicorn to serve Flask and run the bot separately
-    if os.environ.get("RUN_LOCAL", "1") == "1":
-        import threading
+    # Always start Flask in a thread so both OAuth and webhook endpoints are available
+    import threading
 
-        def run_flask():
-            port = int(os.environ.get("PORT", 8080))
-            app.run(port=port)
+    def run_flask():
+        port = int(os.environ.get("PORT", 8080))
+        app.run(port=port)
 
-        flask_thread = threading.Thread(target=run_flask)
-        flask_thread.daemon = True
-        flask_thread.start()
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
 
-        main()
-    # In production, Gunicorn will serve Flask app, so only run the bot
-    else:
-        main()
+    main()
