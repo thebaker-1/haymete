@@ -1,8 +1,6 @@
 import os
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 import mimetypes
-import os
-import mimetypes
 import json
 import pickle
 from io import BytesIO
@@ -13,11 +11,13 @@ from googleapiclient.http import MediaIoBaseUpload
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 from dotenv import load_dotenv
+from telegram.ext import ExtBot
 
 
 # ...existing code...
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or "supersecretkey123!@#"
+telegram_application = None  # Will hold the bot application instance
 
 # Homepage route for Flask
 @app.route("/")
@@ -266,8 +266,7 @@ def callback():
         print(error_message)
         return error_message, 500
 
-# ...existing code for main, ConversationHandler, etc...
-def main():
+def setup_telegram_application():
     telegram_token = os.environ.get("TELEGRAM_TOKEN")
     if not telegram_token:
         raise ValueError("TELEGRAM_TOKEN environment variable is not set.")
@@ -286,33 +285,42 @@ def main():
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("cancel", cancel))
-    # Use polling for local, webhook for production
-    if os.environ.get("RUN_LOCAL", "1") == "1":
-        application.run_polling()
-    else:
-        webhook_url = os.environ.get("WEBHOOK_URL")
-        listen_port = int(os.environ.get("PORT", 8080))
-        telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=listen_port,
-            url_path=telegram_token,
-            webhook_url=f"{webhook_url}/{telegram_token}"
-        )
+    return application
+
+# Flask route for Telegram webhook
+@app.route("/webhook/<token>", methods=["POST"])
+def telegram_webhook(token):
+    import asyncio
+    from telegram import Update as TGUpdate
+    telegram_token = os.environ.get("TELEGRAM_TOKEN")
+    if token != telegram_token:
+        return "Invalid token", 403
+    if telegram_application:
+        # Parse the incoming update using the public API
+        update_json = request.get_json(force=True)
+        update = TGUpdate.de_json(update_json, telegram_application.bot)
+        asyncio.run(telegram_application.process_update(update))
+        return "OK", 200
+    return "Bot not initialized", 500
+
+def run_local():
+    global telegram_application
+    telegram_application = setup_telegram_application()
+    telegram_application.run_polling()
+
+def run_production():
+    import asyncio
+    global telegram_application
+    telegram_application = setup_telegram_application()
+    # Set webhook to Flask endpoint
+    webhook_url = os.environ.get("WEBHOOK_URL")
+    telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
+    full_webhook_url = f"{webhook_url}/webhook/{telegram_token}"
+    asyncio.run(telegram_application.bot.set_webhook(full_webhook_url))
 
 if __name__ == "__main__":
-    # Load .env variables before checking RUN_LOCAL
-    from dotenv import load_dotenv
     load_dotenv()
-    # Always start Flask in a thread so both OAuth and webhook endpoints are available
-    import threading
-
-    def run_flask():
-        port = int(os.environ.get("PORT", 8080))
-        app.run(port=port)
-
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-
-    main()
+    if os.environ.get("RUN_LOCAL", "1") == "1":
+        run_local()
+    else:
+        run_production()
