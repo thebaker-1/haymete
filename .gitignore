@@ -1,3 +1,4 @@
 .env
 *.json
 token.pickle
+bot1.py
