@@ -71,20 +71,19 @@ def get_drive_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
+            # Out-of-band OAuth: send link to Telegram, get code from user
             flow = InstalledAppFlow.from_client_secrets_file(
                 'credentials.json', SCOPES)
-            try:
-                creds = flow.run_local_server(port=0)
-            except Exception as e:
-                print("Could not open browser for OAuth. Please run this script on a machine with a browser.")
-                raise e
-        # Save the credentials for the next run
-        with open('token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
+            auth_url, _ = flow.authorization_url(prompt='consent')
+            # Store flow for later use
+            return flow, auth_url
     service = build('drive', 'v3', credentials=creds)
     return service
 
+
+# Store flow for OOB OAuth
 drive_service = None
+pending_oauth_flow = None
 
 # Start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -160,9 +159,20 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     new_filename = f"{name}_{count}{ext}"
 
     # Upload to Google Drive
-    global drive_service
+    global drive_service, pending_oauth_flow
+    # If drive_service is not ready, start OAuth flow
     if drive_service is None:
-        drive_service = get_drive_service()
+        result = get_drive_service()
+        if isinstance(result, tuple):
+            flow, auth_url = result
+            pending_oauth_flow = flow
+            await update.message.reply_text(
+                f"🔒 Please authorize access to Google Drive by visiting this link:\n{auth_url}\n\nAfter authorizing, please reply with the code you receive.")
+            # Wait for code from user
+            context.user_data['awaiting_oauth_code'] = True
+            return WAITING_FOR_FILE
+        else:
+            drive_service = result
 
     file_metadata = {
         'name': new_filename,
@@ -176,6 +186,21 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await update.message.reply_text(f"✅ File \"{new_filename}\" uploaded successfully to Google Drive.\nThank you!")
 
     return WAITING_FOR_FILE
+    # Handle OAuth code reply
+    if context.user_data.get('awaiting_oauth_code') and update.message and update.message.text:
+        code = update.message.text.strip()
+        global pending_oauth_flow, drive_service
+        try:
+            pending_oauth_flow.fetch_token(code=code)
+            creds = pending_oauth_flow.credentials
+            with open('token.pickle', 'wb') as token:
+                pickle.dump(creds, token)
+            drive_service = build('drive', 'v3', credentials=creds)
+            context.user_data['awaiting_oauth_code'] = False
+            await update.message.reply_text("✅ Google Drive authentication successful! Please resend your file.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Authentication failed: {e}\nPlease try again or check the code.")
+        return WAITING_FOR_FILE
 
 # Cancel handler
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
