@@ -286,7 +286,19 @@ def main():
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("cancel", cancel))
-    application.run_polling()
+    # Use polling for local, webhook for production
+    if os.environ.get("RUN_LOCAL", "1") == "1":
+        application.run_polling()
+    else:
+        webhook_url = os.environ.get("WEBHOOK_URL")
+        listen_port = int(os.environ.get("PORT", 8080))
+        telegram_token = os.environ.get("TELEGRAM_TOKEN", "")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=listen_port,
+            url_path=telegram_token,
+            webhook_url=f"{webhook_url}/{telegram_token}"
+        )
 
 if __name__ == "__main__":
     # Load .env variables before checking RUN_LOCAL
